@@ -16,6 +16,12 @@ The goal of this project is to keep the original behavior as much as possible wh
 - Autosave & converting save files
 - Minor culling & depth buffer fixes
 
+On Windows, macOS and Linux a **launch page** comes up before the game. It lets you pick the display
+(windowed, borderless full screen, or exclusive full screen at one of the monitor's own resolutions
+and refresh rates), the window size, the internal resolution and widescreen. Enter or a controller's
+Start launches. The page can be turned off on the page itself or in the debug UI's Display tab.
+`--launcher` shows it once anyway, and `--no-launcher` or `WIPEOUT_NO_LAUNCHER=1` skips it.
+
 If you would like to change any of the settings or files for the game press the <kbd>`</kbd> or <kbd>~</kbd> key on your keyboard to toggle the debug UI. It has multiple tabs with many options to configure.
 
 Choose a rendering **Resolution** in the debug UI, then a target under **Downsample to**.

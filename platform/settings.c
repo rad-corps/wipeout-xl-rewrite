@@ -107,6 +107,20 @@ static void Set(const char *key, const char *value)
         portSettings.digitalSteering = number != 0;
     } else if (!strcmp(key, "fullscreen")) {
         portSettings.fullscreen = number != 0;
+    } else if (!strcmp(key, "window_width")) {
+        portSettings.windowWidth = SDL_clamp(number, 0, 16384);
+    } else if (!strcmp(key, "window_height")) {
+        portSettings.windowHeight = SDL_clamp(number, 0, 16384);
+    } else if (!strcmp(key, "fullscreen_exclusive")) {
+        portSettings.fullscreenExclusive = number != 0;
+    } else if (!strcmp(key, "fullscreen_width")) {
+        portSettings.fullscreenWidth = SDL_clamp(number, 0, 16384);
+    } else if (!strcmp(key, "fullscreen_height")) {
+        portSettings.fullscreenHeight = SDL_clamp(number, 0, 16384);
+    } else if (!strcmp(key, "fullscreen_refresh")) {
+        portSettings.fullscreenRefresh = SDL_clamp((float)SDL_atof(value), 0.0f, 1000.0f);
+    } else if (!strcmp(key, "show_launcher")) {
+        portSettings.noLauncher = number == 0;
     } else if (!strcmp(key, "vibration_strength") && number > 0) {
         portSettings.rumbleStrength = SDL_clamp(number, 50, 300);
     } else if (!strcmp(key, "pad_type")) {
@@ -275,6 +289,12 @@ int PortSettingsSave(void)
             !portSettings.noFocusPause, portSettings.surround, portSettings.fullscreen, portSettings.digitalSteering,
             portSettings.negconPad, !portSettings.noUpdateCheck);
     fprintf(file, "graphics_backend = %d\n", portSettings.graphicsBackend);
+    fprintf(file,
+            "window_width = %d\nwindow_height = %d\nfullscreen_exclusive = %d\nfullscreen_width = %d\n"
+            "fullscreen_height = %d\nfullscreen_refresh = %g\nshow_launcher = %d\n",
+            portSettings.windowWidth, portSettings.windowHeight, portSettings.fullscreenExclusive,
+            portSettings.fullscreenWidth, portSettings.fullscreenHeight, portSettings.fullscreenRefresh,
+            !portSettings.noLauncher);
     fclose(file);
     return 1;
 }

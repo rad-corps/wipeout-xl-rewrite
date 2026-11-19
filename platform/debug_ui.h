@@ -23,6 +23,9 @@ void DebugUiTab(void);
 void DebugUiRender(void);
 /* Before the game: shows a message across the window (and a progress bar for fraction 0 to 1). */
 void DebugUiSplash(const char *text, float fraction);
+/* Before the game: the launch page (the display, the window or screen's resolution, the internal resolution).
+   Saves and applies the choice; returns 1 to start the game, 0 to quit. */
+int DebugUiLauncher(void);
 
 /* trace.c: the game's frames so far (its Swap calls) */
 uint64_t PortGameFrames(void);

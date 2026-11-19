@@ -32,7 +32,9 @@ int PsxMain(void);
 static void Usage(void)
 {
     fprintf(stderr,
-            "usage: wipeoutxl [--disc FILE.cue] [--window WxH] [--fullscreen]\n"
+            "usage: wipeoutxl [--disc FILE.cue] [--window WxH] [--fullscreen] [--launcher | --no-launcher]\n"
+            "  --launcher / --no-launcher  show (or skip) the launch page, whatever the settings say; it is skipped\n"
+            "             by default when --window or --fullscreen is given\n"
             "  --disc     your Wipeout XL (USA) or WipEout 2097 (Europe) PlayStation disc image: a .cue with its\n"
             "             .bin tracks, a .bin alone, or an archive of either (.7z, .zip, .rar, .tar, .gz, ...);\n"
             "             without it, the one chosen last time, else a file dialog asks for it\n"
@@ -255,6 +257,8 @@ int main(int argc, char **argv)
 {
     const char *value;
     int i, w, h, recordReplay = 0;
+    int launcher = -1;      /* --launcher 1, --no-launcher 0, else the settings' */
+    int windowGiven = 0;    /* --window or --fullscreen (a restart from the debug console gives both) */
     int discFromSettings = 0; /* the disc is the settings' (or the dialog's), not one given (--disc) */
 
     portConfig.discPath = SDL_getenv("WIPEOUT_XL_DISC");
@@ -280,9 +284,15 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[i], "--window") && i + 1 < argc && SDL_sscanf(argv[i + 1], "%dx%d", &w, &h) == 2) {
             portConfig.windowWidth = w;
             portConfig.windowHeight = h;
+            windowGiven = 1;
             i++;
         } else if (!strcmp(argv[i], "--fullscreen")) {
             portConfig.fullscreen = 1;
+            windowGiven = 1;
+        } else if (!strcmp(argv[i], "--launcher")) {
+            launcher = 1;
+        } else if (!strcmp(argv[i], "--no-launcher")) {
+            launcher = 0;
         } else if (!strcmp(argv[i], "--link-slave")) {
             /* the second player's game, started by the first's (link.c, platform/second/): no window, no music */
             portConfig.secondPlayer = 1;
@@ -299,6 +309,13 @@ int main(int argc, char **argv)
     PortSettingsLoad();
     if (portSettings.fullscreen) {
         portConfig.fullscreen = 1; /* full screen when the game was last left */
+    }
+    if (!windowGiven && portSettings.windowWidth >= 320 && portSettings.windowHeight >= 240) {
+        portConfig.windowWidth = portSettings.windowWidth; /* the launch page's window size */
+        portConfig.windowHeight = portSettings.windowHeight;
+    }
+    if (launcher < 0) {
+        launcher = !windowGiven && !portSettings.noLauncher && !SDL_getenv("WIPEOUT_NO_LAUNCHER");
     }
     PortMusicInit();
     if (!portConfig.savePath && portSettings.saveDir[0]) {
@@ -341,6 +358,15 @@ int main(int argc, char **argv)
     if (!PortVideoInit()) {
         return 1;
     }
+#if !defined(__EMSCRIPTEN__) && !defined(PORT_MOBILE) && !defined(PORT_SECOND_GAME)
+    /* the launch page: the display and the resolutions, before the game (not in the tests' hidden runs, nor the
+       second player's game) */
+    if (launcher && !portConfig.hidden && !portConfig.secondPlayer && !DebugUiLauncher()) {
+        PortVideoShutdown();
+        SDL_Quit();
+        return 0;
+    }
+#endif
 #ifdef __EMSCRIPTEN__
     PortPrepareButtonGlyphs(); /* keep first-use rasterization out of the title sound */
 #endif

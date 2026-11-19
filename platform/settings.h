@@ -54,6 +54,11 @@ typedef struct PortSettings {
     int fullscreen;       /* the window was full screen when last left: the next start is too (video.c) */
     int noUpdateCheck;    /* 0: check GitHub once at launch, 1: stay offline */
     int graphicsBackend; /* RenderBackend, or -1 for the platform default */
+    int windowWidth, windowHeight; /* the window's size when not full screen (0: 1280x960); the launch page sets it */
+    int fullscreenExclusive; /* full screen changes the display's mode (below) instead of covering the desktop */
+    int fullscreenWidth, fullscreenHeight; /* ... that mode (0: the desktop's) */
+    float fullscreenRefresh; /* ... its refresh rate (0: the highest the display offers at that size) */
+    int noLauncher;       /* no launch page before the game (launcher.c; --launcher shows it anyway) */
 } PortSettings;
 
 /* PortSettings.downsampleStyle: the target scale is in downsample; 0 there disables either style. */

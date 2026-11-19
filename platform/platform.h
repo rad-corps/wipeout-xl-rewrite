@@ -45,6 +45,7 @@ void PortDumpVram(void);
 void PortDrawableSize(int *width, int *height); /* in pixels */
 void PortWindowSize(int *width, int *height);   /* in the window system's points (--window) */
 int PortWindowFullscreen(void);
+void PortApplyDisplayMode(void); /* the settings' full-screen mode (exclusive at a size and rate, or the desktop's) */
 /* main.c: the game starts again with this disc image (the debug console); returns only on failure. */
 int PortRestart(const char *discPath);
 /* Whether the window has the input focus (always, for the hidden test window). */

@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "imgui.h"
+#include "imgui_internal.h" // (GetFocusID: the launch page's Enter key)
 #include "backends/imgui_impl_sdl3.h"
 
 extern "C" {
@@ -1955,6 +1956,13 @@ static void Console(void)
             if (ImGui::Checkbox("Full screen (Alt+Enter, F11)", &fullscreen)) {
                 SDL_SetWindowFullscreen(window, fullscreen);
             }
+#if !defined(__EMSCRIPTEN__) && !defined(PORT_MOBILE)
+            bool launcher = !portSettings.noLauncher;
+            if (ImGui::Checkbox("Show the launch page when the game starts", &launcher)) {
+                portSettings.noLauncher = !launcher;
+                Changed();
+            }
+#endif
             ImGui::Separator();
             HdTextures();
             Browser(); /* (a picker's, where the system has no file dialog) */
@@ -2146,6 +2154,280 @@ extern "C" void DebugUiSplash(const char *text, float fraction)
     GpuClearWindow(0.0f, 0.0f, 0.18f);
     RenderImGuiDraw(ImGui::GetDrawData());
     RenderPresent();
+}
+
+// ---- the launch page: the display and the resolutions, chosen before the game starts ----
+
+namespace {
+
+struct LaunchSize {
+    int w, h;
+    float refresh; // (exclusive full screen's modes)
+    char label[48];
+};
+
+enum { LAUNCH_WINDOWED, LAUNCH_BORDERLESS, LAUNCH_EXCLUSIVE };
+
+// The window sizes that fit the display: its own modes' sizes and the usual ones, largest first.
+int WindowedSizes(SDL_DisplayID display, LaunchSize *sizes, int capacity)
+{
+    static const int common[][2] = {{640, 480},   {800, 600},   {960, 720},   {1024, 768},  {1280, 720},
+                                    {1280, 960},  {1366, 768},  {1600, 900},  {1600, 1200}, {1920, 1080},
+                                    {1920, 1440}, {2560, 1440}, {2880, 2160}, {3840, 2160}};
+    SDL_Rect usable = {0, 0, 1920, 1080};
+    int count = 0, modes = 0;
+
+    SDL_GetDisplayUsableBounds(display, &usable);
+    SDL_DisplayMode **list = SDL_GetFullscreenDisplayModes(display, &modes);
+    auto add = [&](int w, int h) {
+        if (w > usable.w || h > usable.h || count >= capacity) return;
+        for (int i = 0; i < count; i++)
+            if (sizes[i].w == w && sizes[i].h == h) return;
+        sizes[count].w = w;
+        sizes[count].h = h;
+        sizes[count].refresh = 0;
+        count++;
+    };
+    for (int i = 0; list && i < modes; i++) add(list[i]->w, list[i]->h);
+    for (auto &size : common) add(size[0], size[1]);
+    SDL_free(list);
+    // largest first
+    for (int i = 1; i < count; i++)
+        for (int j = i; j > 0 && sizes[j].w * sizes[j].h > sizes[j - 1].w * sizes[j - 1].h; j--) {
+            LaunchSize swap = sizes[j];
+            sizes[j] = sizes[j - 1];
+            sizes[j - 1] = swap;
+        }
+    for (int i = 0; i < count; i++)
+        SDL_snprintf(sizes[i].label, sizeof(sizes[i].label), "%d x %d", sizes[i].w, sizes[i].h);
+    return count;
+}
+
+// The display's own modes for exclusive full screen (SDL lists them largest and fastest first).
+int ExclusiveModes(SDL_DisplayID display, LaunchSize *sizes, int capacity)
+{
+    int count = 0, modes = 0;
+    SDL_DisplayMode **list = SDL_GetFullscreenDisplayModes(display, &modes);
+
+    for (int i = 0; list && i < modes && count < capacity; i++) {
+        bool seen = false;
+        for (int j = 0; j < count; j++)
+            seen |= sizes[j].w == list[i]->w && sizes[j].h == list[i]->h &&
+                    SDL_fabsf(sizes[j].refresh - list[i]->refresh_rate) < 0.01f;
+        if (seen) continue;
+        sizes[count].w = list[i]->w;
+        sizes[count].h = list[i]->h;
+        sizes[count].refresh = list[i]->refresh_rate;
+        SDL_snprintf(sizes[count].label, sizeof(sizes[count].label), "%d x %d @ %.4g Hz", list[i]->w, list[i]->h,
+                     list[i]->refresh_rate);
+        count++;
+    }
+    SDL_free(list);
+    return count;
+}
+
+int ClosestSize(const LaunchSize *sizes, int count, int w, int h, float refresh)
+{
+    int best = 0;
+    double bestScore = 1e30;
+
+    for (int i = 0; i < count; i++) {
+        double score = SDL_fabs((double)sizes[i].w - w) + SDL_fabs((double)sizes[i].h - h) +
+                       (refresh > 0 ? SDL_fabs(sizes[i].refresh - refresh) * 0.01 : -sizes[i].refresh * 0.0001);
+        if (score < bestScore) {
+            bestScore = score;
+            best = i;
+        }
+    }
+    return best;
+}
+
+} // namespace
+
+extern "C" int DebugUiLauncher(void)
+{
+    if (!ready) {
+        return 1;
+    }
+    SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+    const SDL_DisplayMode *desktop = SDL_GetDesktopDisplayMode(display);
+    int desktopW = desktop ? desktop->w : 1920, desktopH = desktop ? desktop->h : 1080;
+    float desktopDensity = desktop && desktop->pixel_density > 0 ? desktop->pixel_density : 1.0f;
+    static LaunchSize windowed[64], exclusive[256];
+    int windowedCount = WindowedSizes(display, windowed, 64);
+    int exclusiveCount = ExclusiveModes(display, exclusive, 256);
+    int windowW = portSettings.windowWidth > 0 ? portSettings.windowWidth : 1280;
+    int windowH = portSettings.windowHeight > 0 ? portSettings.windowHeight : 960;
+    int windowChoice = windowedCount ? ClosestSize(windowed, windowedCount, windowW, windowH, 0) : 0;
+    int exclusiveChoice = exclusiveCount
+                              ? ClosestSize(exclusive, exclusiveCount,
+                                            portSettings.fullscreenWidth > 0 ? portSettings.fullscreenWidth : desktopW,
+                                            portSettings.fullscreenHeight > 0 ? portSettings.fullscreenHeight : desktopH,
+                                            portSettings.fullscreenRefresh)
+                              : 0;
+    int displayMode = !portSettings.fullscreen ? LAUNCH_WINDOWED
+                      : portSettings.fullscreenExclusive && exclusiveCount ? LAUNCH_EXCLUSIVE
+                                                                           : LAUNCH_BORDERLESS;
+    int scale = portSettings.renderScale;
+    bool wide = portSettings.widescreen != 0, showAgain = !portSettings.noLauncher;
+    int result = -1;
+    ImGuiIO &io = ImGui::GetIO();
+    ImGuiConfigFlags flags = io.ConfigFlags;
+
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    while (result < 0) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                result = 0;
+            }
+            ImGui_ImplSDL3_ProcessEvent(&event);
+        }
+        if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) {
+            SDL_Delay(50);
+            continue;
+        }
+        FitToWindow();
+        RenderImGuiNewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
+        const ImGuiViewport *view = ImGui::GetMainViewport();
+        float ui = ImGui::GetIO().FontGlobalScale;
+        ImGui::SetNextWindowPos(ImVec2(view->Pos.x + view->Size.x / 2, view->Pos.y + view->Size.y / 2), ImGuiCond_Always,
+                                ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(SDL_min(view->Size.x * 0.9f, 620.0f * ui), 0), ImGuiCond_Always);
+        ImGui::Begin("##launcher", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::SetWindowFontScale(1.8f);
+        ImGui::TextUnformatted("WIPEOUT XL");
+        ImGui::SetWindowFontScale(1.0f);
+        if (PORT_VERSION[0]) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("  %s", PORT_VERSION);
+        }
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::PushItemWidth(-ImGui::GetContentRegionAvail().x * 0.42f);
+
+        static const char *const displayNames[] = {"Windowed", "Full screen (borderless)", "Full screen (exclusive)"};
+        ImGui::Combo("Display", &displayMode, displayNames, exclusiveCount ? 3 : 2);
+
+        // the size of the picture the window or screen shows, in pixels (for Auto's label)
+        int pixelsW, pixelsH;
+        if (displayMode == LAUNCH_WINDOWED) {
+            const char *preview = windowedCount ? windowed[windowChoice].label : "1280 x 960";
+            if (ImGui::BeginCombo("Window size", preview)) {
+                for (int i = 0; i < windowedCount; i++) {
+                    if (ImGui::Selectable(windowed[i].label, i == windowChoice)) windowChoice = i;
+                    if (i == windowChoice) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            float density = SDL_GetWindowPixelDensity(window);
+            pixelsW = (int)((windowedCount ? windowed[windowChoice].w : 1280) * density);
+            pixelsH = (int)((windowedCount ? windowed[windowChoice].h : 960) * density);
+        } else if (displayMode == LAUNCH_EXCLUSIVE) {
+            if (ImGui::BeginCombo("Screen resolution", exclusive[exclusiveChoice].label)) {
+                for (int i = 0; i < exclusiveCount; i++) {
+                    if (ImGui::Selectable(exclusive[i].label, i == exclusiveChoice)) exclusiveChoice = i;
+                    if (i == exclusiveChoice) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            pixelsW = exclusive[exclusiveChoice].w;
+            pixelsH = exclusive[exclusiveChoice].h;
+        } else {
+            char label[64];
+            SDL_snprintf(label, sizeof(label), "%d x %d (the desktop's)", desktopW, desktopH);
+            ImGui::BeginDisabled();
+            if (ImGui::BeginCombo("Screen resolution", label)) ImGui::EndCombo();
+            ImGui::EndDisabled();
+            pixelsW = (int)(desktopW * desktopDensity);
+            pixelsH = (int)(desktopH * desktopDensity);
+        }
+
+        // the game's own drawing: multiples of the console's 320x240 (wider with widescreen), or Auto (the screen's)
+        int count = GpuMaxScale(), columns = 320;
+        if (wide && pixelsH > 0) columns = SDL_clamp((int)SDL_ceil(240.0 * pixelsW / pixelsH), 320, 320 + 2 * 400);
+        int autoScale = SDL_clamp((pixelsH + GPU_LINES - 1) / GPU_LINES, 1, SDL_min(8, count));
+        char autoLabel[64], labels[16][48];
+        const char *items[17];
+        SDL_snprintf(autoLabel, sizeof(autoLabel), "Auto (%d x %d)", columns * autoScale, GPU_LINES * autoScale);
+        items[0] = autoLabel;
+        for (int i = 1; i <= count && i <= 16; i++) {
+            SDL_snprintf(labels[i - 1], sizeof(labels[i - 1]), "%d x %d%s", columns * i, GPU_LINES * i,
+                         i == 1 ? " (PS1 original)" : "");
+            items[i] = labels[i - 1];
+        }
+        scale = SDL_min(scale, SDL_min(count, 16));
+        ImGui::Combo("Internal resolution", &scale, items, SDL_min(count, 16) + 1);
+        ImGui::Checkbox("Widescreen", &wide);
+        ImGui::PopItemWidth();
+        ImGui::Spacing();
+        DisabledWrapped("Internal resolution is what the game draws at; it is scaled to fit the window or screen. "
+                        "Higher looks sharper but asks more of the graphics card. All of these can be changed later "
+                        "in the debug console (the ~ key).");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Checkbox("Show this page when the game starts", &showAgain);
+        ImGui::Spacing();
+
+        float buttonW = 140.0f * ui;
+        if (ImGui::Button("Launch", ImVec2(buttonW, 0))) result = 1;
+        ImGuiID launchId = ImGui::GetItemID();
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(-1);
+        ImGui::SameLine();
+        if (ImGui::Button("Quit", ImVec2(buttonW, 0))) result = 0;
+        ImGui::SameLine();
+        ImGui::TextDisabled("Enter / Start: launch    Esc: quit");
+        if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) && !ImGui::IsAnyItemActive()) {
+            // Enter launches unless another control has the keyboard's focus (it is that control's then)
+            ImGuiID focused = ImGui::GetFocusID();
+            if ((ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) &&
+                (focused == 0 || focused == launchId))
+                result = 1;
+            if (ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) result = 1;
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) result = 0;
+        }
+        ImGui::End();
+
+        ImGui::Render();
+        GpuClearWindow(0.0f, 0.0f, 0.18f);
+        RenderImGuiDraw(ImGui::GetDrawData());
+        RenderPresent();
+    }
+    io.ConfigFlags = flags;
+
+    if (result == 1) {
+        if (windowedCount) {
+            portSettings.windowWidth = windowed[windowChoice].w;
+            portSettings.windowHeight = windowed[windowChoice].h;
+        }
+        portSettings.fullscreen = displayMode != LAUNCH_WINDOWED;
+        portSettings.fullscreenExclusive = displayMode == LAUNCH_EXCLUSIVE;
+        if (displayMode == LAUNCH_EXCLUSIVE) {
+            portSettings.fullscreenWidth = exclusive[exclusiveChoice].w;
+            portSettings.fullscreenHeight = exclusive[exclusiveChoice].h;
+            portSettings.fullscreenRefresh = exclusive[exclusiveChoice].refresh;
+        }
+        portSettings.renderScale = scale;
+        portSettings.widescreen = wide;
+        portSettings.noLauncher = !showAgain;
+        PortSettingsSave();
+
+        PortApplyDisplayMode();
+        if (displayMode == LAUNCH_WINDOWED) {
+            SDL_SetWindowFullscreen(window, false);
+            SDL_SyncWindow(window);
+            SDL_SetWindowSize(window, portSettings.windowWidth, portSettings.windowHeight);
+            SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+        } else {
+            SDL_SetWindowFullscreen(window, true);
+        }
+        SDL_SyncWindow(window);
+    }
+    return result;
 }
 
 extern "C" void DebugUiRender(void)

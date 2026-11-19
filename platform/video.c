@@ -136,6 +136,7 @@ int PortVideoInit(void)
     GpuSetWindowFramebuffer((unsigned int)SDL_GetNumberProperty(SDL_GetWindowProperties(window),
                                                                 SDL_PROP_WINDOW_UIKIT_OPENGL_FRAMEBUFFER_NUMBER, 0));
 #endif
+    PortApplyDisplayMode();
     TouchInit(window);
     if (!portConfig.hidden || SDL_getenv("WIPEOUT_DEBUG_UI")) {
         DebugUiInit(window, context); /* WIPEOUT_DEBUG_UI: also in a hidden test run */
@@ -147,6 +148,28 @@ int PortVideoInit(void)
 SDL_Window *PortWindow(void)
 {
     return window;
+}
+
+/* The full screen the settings ask for: the display switched to a mode of the player's (a size and refresh rate,
+   exclusive), else a window covering the desktop at its own. It holds whenever the window is full screen: from
+   the start, the launch page, F11 or Alt+Enter. */
+void PortApplyDisplayMode(void)
+{
+#if !defined(__EMSCRIPTEN__) && !defined(PORT_MOBILE)
+    SDL_DisplayMode mode;
+
+    if (!window || portConfig.hidden || portConfig.secondPlayer) {
+        return;
+    }
+    if (portSettings.fullscreenExclusive && portSettings.fullscreenWidth > 0 && portSettings.fullscreenHeight > 0 &&
+        SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(window), portSettings.fullscreenWidth,
+                                            portSettings.fullscreenHeight, portSettings.fullscreenRefresh, true,
+                                            &mode)) {
+        SDL_SetWindowFullscreenMode(window, &mode);
+    } else {
+        SDL_SetWindowFullscreenMode(window, NULL);
+    }
+#endif
 }
 
 /* The game paces itself to the console's field rate (libetc.c). On screen each picture also waits for the
